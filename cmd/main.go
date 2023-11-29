@@ -2,10 +2,12 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"io"
 	nurl "net/url"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/xoltia/otame"
@@ -21,7 +23,8 @@ CREATE TABLE IF NOT EXISTS anime_offline_database (
 	season TEXT NOT NULL,
 	season_year INTEGER,
 	picture TEXT NOT NULL,
-	thumbnail TEXT NOT NULL
+	thumbnail TEXT NOT NULL,
+	inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS anime_offline_database_synonyms (
@@ -56,7 +59,7 @@ CREATE TABLE IF NOT EXISTS anime_offline_database_sources (
 `
 
 func main() {
-	db, err := sql.Open("sqlite3", "file:anime-offline-database.sqlite3")
+	db, err := sql.Open("sqlite3", "file:anime-offline-database.sqlite3?_journal_mode=WAL")
 
 	if err != nil {
 		panic(err)
@@ -65,6 +68,46 @@ func main() {
 	defer db.Close()
 
 	_, err = db.Exec(createAnimeOfflineDatabaseTablesSQL)
+
+	// for testing, keep reading the first 10 entries every 500ms
+	go func() {
+		conn2, err := sql.Open("sqlite3", "file:anime-offline-database.sqlite3")
+		defer conn2.Close()
+		if err != nil {
+			panic(err)
+		}
+		for {
+			fmt.Println("Reading first 10 entries")
+
+			const query = `
+				SELECT id, inserted_at
+				FROM anime_offline_database
+				ORDER BY id ASC
+				LIMIT 10
+			`
+
+			rows, err := conn2.Query(query)
+
+			if err != nil {
+				panic(err)
+			}
+
+			for rows.Next() {
+				var id int64
+				var insertedAt time.Time
+
+				err = rows.Scan(&id, &insertedAt)
+
+				if err != nil {
+					panic(err)
+				}
+
+				fmt.Printf("id: %d, inserted_at: %s\n", id, insertedAt)
+			}
+
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
 
 	if err != nil {
 		panic(err)
@@ -79,6 +122,37 @@ func main() {
 	decoder := otame.NewAnimeOfflineDatabaseDecoder(file)
 
 	tx, err := db.Begin()
+
+	// delete old data
+	_, err = tx.Exec("DELETE FROM anime_offline_database")
+
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_synonyms")
+
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_relations")
+
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_tags")
+
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_sources")
+
+	if err != nil {
+		panic(err)
+	}
 
 	for {
 		entry, err := decoder.Next()
@@ -104,8 +178,9 @@ func main() {
 				season,
 				season_year,
 				picture,
-				thumbnail
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				thumbnail,
+				inserted_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`)
 
 		if err != nil {
@@ -123,6 +198,7 @@ func main() {
 			entry.AnimeSeason.Year,
 			entry.Picture,
 			entry.Thumbnail,
+			time.Now(),
 		)
 
 		if err != nil {
@@ -233,7 +309,11 @@ func main() {
 		}
 	}
 
+	now := time.Now()
+
 	err = tx.Commit()
+
+	fmt.Printf("Finished in %s\n", time.Since(now))
 
 	if err != nil {
 		panic(err)
