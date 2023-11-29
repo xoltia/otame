@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// TODO: Currently only supports DAT files.
+// May be easier to just use XML.
+
 // TODO: Add support for other title types.
 type AniDBEntry struct {
 	ID                    string
