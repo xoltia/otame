@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var ErrEOF = io.EOF
+
 type RowIterator[T any] interface {
 	Next() (T, error)
 }
@@ -272,7 +274,7 @@ func ReplaceAnimeOfflineDatabaseEntriesFromIterator[
 		var entry AnimeOfflineDatabaseEntry
 		entry, err = iter.Next()
 
-		if err == io.EOF {
+		if err == ErrEOF {
 			break
 		}
 

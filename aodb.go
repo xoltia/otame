@@ -65,7 +65,7 @@ func (a *AnimeOfflineDatabaseDecoder) Next() (entry AnimeOfflineDatabaseEntry, e
 	}
 
 	if !a.decoder.More() {
-		err = io.EOF
+		err = ErrEOF
 		return
 	}
 
