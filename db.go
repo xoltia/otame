@@ -30,6 +30,11 @@ func CloseDB() (err error) {
 	return
 }
 
+func NewDBTransaction() (tx *sql.Tx, err error) {
+	tx, err = db.Begin()
+	return
+}
+
 func CreateAnimeOfflineDatabaseTables() (err error) {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS anime_offline_database (
@@ -339,12 +344,36 @@ func CreateAniDBTables() (err error) {
 		BEGIN
 			INSERT INTO anidb_titles_en_fts_idx(docid, title) VALUES (new.id, new.title);
 		END;
+
+		CREATE TRIGGER IF NOT EXISTS anidb_titles_before_delete_x_jat BEFORE DELETE ON anidb_titles
+		WHEN old.language = 'x_jat'
+		BEGIN
+  			DELETE FROM anidb_titles_x_jat_fts_idx WHERE docid = old.id;
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS anidb_titles_before_delete_ja BEFORE DELETE ON anidb_titles
+		WHEN old.language = 'ja'
+		BEGIN
+			DELETE FROM anidb_titles_ja_fts_idx WHERE docid = old.id;
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS anidb_titles_before_delete_en BEFORE DELETE ON anidb_titles
+		WHEN old.language = 'en'
+		BEGIN
+			DELETE FROM anidb_titles_en_fts_idx WHERE docid = old.id;
+		END;
 	`)
 
 	return
 }
 
-func InsertManyAniDBEntriesFromIterator[
+func DeleteAllAniDBEntriesWithTx(tx *sql.Tx) (err error) {
+	_, err = tx.Exec("DELETE FROM anidb_titles")
+
+	return
+}
+
+func ReplaceAniDBEntriesFromIterator[
 	T RowIterator[AniDBEntry],
 ](iter T) (err error) {
 	tx, err := db.Begin()
@@ -354,6 +383,10 @@ func InsertManyAniDBEntriesFromIterator[
 	}
 
 	defer tx.Rollback()
+
+	if err = DeleteAllAniDBEntriesWithTx(tx); err != nil {
+		return
+	}
 
 	for {
 		var entry AniDBEntry

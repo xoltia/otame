@@ -57,7 +57,7 @@ func main() {
 
 	anidbDecoder := otame.NewAniDBEntryDecoder(anidbFile)
 
-	if err = otame.InsertManyAniDBEntriesFromIterator(anidbDecoder); err != nil {
+	if err = otame.ReplaceAniDBEntriesFromIterator(anidbDecoder); err != nil {
 		panic(err)
 	}
 
