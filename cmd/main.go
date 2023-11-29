@@ -70,7 +70,7 @@ func main() {
 		panic(err)
 	}
 
-	file, err := os.Open("anime-offline-database.json")
+	file, err := os.Open("./data/anime-offline-database.json")
 
 	if err != nil {
 		panic(err)
@@ -222,8 +222,8 @@ func main() {
 			}
 
 			// last part of the path
-			pathParts := strings.Split(url.Path, "/")
-			sourceID := pathParts[len(pathParts)-1]
+			lastSlashIndex := strings.LastIndex(url.Path, "/")
+			sourceID := url.Path[lastSlashIndex+1:]
 
 			_, err = stmt.Exec(id, url.Hostname(), source, sourceID)
 
