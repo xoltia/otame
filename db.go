@@ -293,3 +293,115 @@ func ReplaceAnimeOfflineDatabaseEntriesFromIterator[
 
 	return
 }
+
+func CreateAniDBTables() (err error) {
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS anidb_titles (
+			id INTEGER PRIMARY KEY,
+			aid TEXT NOT NULL,
+			type TEXT NOT NULL,
+			title TEXT NOT NULL,
+			language TEXT NOT NULL
+		);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS anidb_titles_x_jat_fts_idx USING fts4(
+			title,
+			content='anidb_titles',
+			tokenize='simple'
+		);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS anidb_titles_ja_fts_idx USING fts4(
+			title,
+			content='anidb_titles',
+			tokenize=icu ja
+		);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS anidb_titles_en_fts_idx USING fts4(
+			title,
+			content='anidb_titles',
+			tokenize=icu en
+		);
+
+		CREATE TRIGGER IF NOT EXISTS anidb_titles_after_insert_x_jat AFTER INSERT ON anidb_titles
+		WHEN new.language = 'x_jat'
+		BEGIN
+			INSERT INTO anidb_titles_x_jat_fts_idx(docid, title) VALUES (new.id, new.title);
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS anidb_titles_after_insert_ja AFTER INSERT ON anidb_titles
+		WHEN new.language = 'ja'
+		BEGIN
+			INSERT INTO anidb_titles_ja_fts_idx(docid, title) VALUES (new.id, new.title);
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS anidb_titles_after_insert_en AFTER INSERT ON anidb_titles
+		WHEN new.language = 'en'
+		BEGIN
+			INSERT INTO anidb_titles_en_fts_idx(docid, title) VALUES (new.id, new.title);
+		END;
+	`)
+
+	return
+}
+
+func InsertManyAniDBEntriesFromIterator[
+	T RowIterator[AniDBEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	for {
+		var entry AniDBEntry
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		err = CreateAniDBEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = tx.Commit()
+
+	return
+}
+
+func CreateAniDBEntryWithTx(tx *sql.Tx, entry AniDBEntry) (err error) {
+	var stmt *sql.Stmt
+	stmt, err = tx.Prepare(`
+		INSERT INTO anidb_titles (
+			aid,
+			type,
+			title,
+			language
+		) VALUES (?, ?, ?, ?)
+	`)
+
+	if err != nil {
+		return
+	}
+
+	defer stmt.Close()
+
+	_, err = stmt.Exec(
+		entry.ID,
+		entry.Type,
+		entry.Title,
+		entry.Language,
+	)
+
+	return
+}
