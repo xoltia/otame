@@ -31,6 +31,21 @@ func main() {
 		panic(err)
 	}
 
+	vnImagesPath := path.Join(*vndbPath, "db", "images")
+	vnImagesFile, err := os.Open(vnImagesPath)
+
+	if err != nil {
+		panic(err)
+	}
+
+	defer vnImagesFile.Close()
+
+	vnImagesDecoder := otame.NewVNDBImageEntryDecoder(vnImagesFile)
+
+	if err = otame.ReplaceVNDBImageEntriesFromIterator(vnImagesDecoder); err != nil {
+		panic(err)
+	}
+
 	vnsFilePath := path.Join(*vndbPath, "db", "vn")
 	vnsFile, err := os.Open(vnsFilePath)
 

@@ -447,7 +447,8 @@ func CreateVNDBTables() (err error) {
 		CREATE TABLE IF NOT EXISTS vndb_visual_novels (
 			vnid TEXT PRIMARY KEY NOT NULL,
 			original_language TEXT NOT NULL,
-			image_id TEXT
+			image_id TEXT,
+			FOREIGN KEY(image_id) REFERENCES vndb_images(id)
 		);
 
 		CREATE TABLE IF NOT EXISTS vndb_titles (
@@ -458,6 +459,16 @@ func CreateVNDBTables() (err error) {
 			official BOOLEAN NOT NULL,
 			latin TEXT,
 			FOREIGN KEY(vnid) REFERENCES vndb_visual_novels(vnid)
+		);
+
+		CREATE TABLE IF NOT EXISTS vndb_images (
+			id TEXT PRIMARY KEY NOT NULL,
+			width INTEGER NOT NULL,
+			height INTEGER NOT NULL,
+			sexual_avg INTEGER NOT NULL,
+			sexual_dev INTEGER NOT NULL,
+			violence_avg INTEGER NOT NULL,
+			violence_dev INTEGER NOT NULL
 		);
 
 		CREATE VIRTUAL TABLE IF NOT EXISTS vndb_titles_ja_fts_idx USING fts4(
@@ -641,6 +652,91 @@ func CreateVNDBTitleEntryWithTx(tx *sql.Tx, entry VNDBTitleEntry) (err error) {
 		entry.Official,
 		entry.Latin,
 	)
+
+	return
+}
+
+func CreateVNDBImageEntryWithTx(tx *sql.Tx, entry VNDBImageEntry) (err error) {
+	var stmt *sql.Stmt
+	stmt, err = tx.Prepare(`
+		INSERT INTO vndb_images (
+			id,
+			width,
+			height,
+			sexual_avg,
+			sexual_dev,
+			violence_avg,
+			violence_dev
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`)
+
+	if err != nil {
+		return
+	}
+
+	defer stmt.Close()
+
+	_, err = stmt.Exec(
+		entry.ID,
+		entry.Width,
+		entry.Height,
+		entry.SexualAvg,
+		entry.SexualDev,
+		entry.ViolenceAvg,
+		entry.ViolenceDev,
+	)
+
+	return
+}
+
+func DeleteAllVNDBImageEntriesWithTx(tx *sql.Tx) (err error) {
+	_, err = tx.Exec("DELETE FROM vndb_images")
+
+	return
+}
+
+func ReplaceVNDBImageEntriesFromIterator[
+	T RowIterator[VNDBImageEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	if err = DeleteAllVNDBImageEntriesWithTx(tx); err != nil {
+		return
+	}
+
+	for {
+		var entry VNDBImageEntry
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		imgType := entry.ID[0:2]
+
+		// for now we only care about cv images
+		if imgType != "cv" {
+			continue
+		}
+
+		err = CreateVNDBImageEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = tx.Commit()
 
 	return
 }
