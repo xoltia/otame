@@ -6,6 +6,8 @@ import (
 	"io"
 	nurl "net/url"
 	"strings"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 var ErrEOF = io.EOF
@@ -71,6 +73,11 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			synonym TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
 		);
+
+		CREATE INDEX IF NOT EXISTS
+			anime_offline_database_synonyms_anime_offline_database_id_idx
+		ON
+			anime_offline_database_synonyms(anime_offline_database_id);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_relations (
 			id INTEGER PRIMARY KEY,
@@ -78,6 +85,11 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			relation TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
 		);
+
+		CREATE INDEX IF NOT EXISTS
+			anime_offline_database_relations_anime_offline_database_id_idx
+		ON
+			anime_offline_database_relations(anime_offline_database_id);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_tags (
 			id INTEGER PRIMARY KEY,
@@ -85,6 +97,11 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			tag TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
 		);
+
+		CREATE INDEX IF NOT EXISTS
+			anime_offline_database_tags_anime_offline_database_id_idx
+		ON
+			anime_offline_database_tags(anime_offline_database_id);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_sources (
 			id INTEGER PRIMARY KEY,
@@ -94,6 +111,16 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			source_id TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
 		);
+
+		CREATE INDEX IF NOT EXISTS
+			anime_offline_database_sources_anime_offline_database_id_idx
+		ON
+			anime_offline_database_sources(anime_offline_database_id);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS
+			anime_offline_database_sources_source_id_and_source_name_idx
+		ON
+			anime_offline_database_sources(source_id, source_name);
 	`)
 	return
 }
@@ -322,6 +349,8 @@ func CreateAniDBTables() (err error) {
 			language TEXT NOT NULL
 		);
 
+		CREATE INDEX IF NOT EXISTS anidb_titles_aid_idx ON anidb_titles(aid);
+
 		CREATE VIRTUAL TABLE IF NOT EXISTS anidb_titles_x_jat_fts_idx USING fts4(
 			title,
 			content='anidb_titles',
@@ -470,6 +499,8 @@ func CreateVNDBTables() (err error) {
 			latin TEXT,
 			FOREIGN KEY(vnid) REFERENCES vndb_visual_novels(vnid)
 		);
+
+		CREATE INDEX IF NOT EXISTS vndb_titles_vnid_idx ON vndb_titles(vnid);
 
 		CREATE TABLE IF NOT EXISTS vndb_images (
 			id TEXT PRIMARY KEY NOT NULL,
