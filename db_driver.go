@@ -81,15 +81,11 @@ func init() {
 				var mi MatchInfo
 				err = mi.Read(miBytes)
 
-				fmt.Println(mi)
-
 				if err != nil {
 					panic(fmt.Sprint("failed to read matchinfo: ", err))
 				}
 
 				rank = DefaultRankFunc(&mi)
-
-				fmt.Println(rank)
 
 				return
 			}, true)
