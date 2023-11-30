@@ -110,5 +110,4 @@ func main() {
 	if err = otame.ReplaceAniDBEntriesFromIterator(anidbDecoder); err != nil {
 		panic(err)
 	}
-
 }

@@ -6,8 +6,6 @@ import (
 	"io"
 	nurl "net/url"
 	"strings"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 var ErrEOF = io.EOF
@@ -15,8 +13,6 @@ var ErrEOF = io.EOF
 type RowIterator[T any] interface {
 	Next() (T, error)
 }
-
-const driverName = "sqlite3"
 
 var db *sql.DB
 
@@ -27,6 +23,11 @@ func OpenDB(fileName string) (err error) {
 	// TODO: metadata table to remember update time,
 	// and version of the database schema.
 	return
+}
+
+// Just in case you want to run custom queries.
+func GetDB() *sql.DB {
+	return db
 }
 
 func CloseDB() (err error) {
@@ -778,6 +779,47 @@ func ReplaceVNDBImageEntriesFromIterator[
 	}
 
 	err = tx.Commit()
+
+	return
+}
+
+func SearchAniDBJapaneseTitles(query string, limit int) (entries []AniDBEntry, err error) {
+	// get docids from fts index and join with anidb_titles
+	rows, err := db.Query(`
+		SELECT
+			anidb_titles.id,
+			anidb_titles.type,
+			anidb_titles.title,
+			anidb_titles.language
+		FROM
+			anidb_titles
+		JOIN (
+			SELECT docid, rank(matchinfo(anidb_titles_ja_fts_idx)) AS rank
+			FROM anidb_titles_ja_fts_idx
+			WHERE title MATCH ?
+			ORDER BY rank DESC
+			LIMIT ?
+		) AS matches ON matches.docid = anidb_titles.id
+	`, query, limit)
+
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var entry AniDBEntry
+		err = rows.Scan(&entry.ID, &entry.Type, &entry.Title, &entry.Language)
+
+		if err != nil {
+			return
+		}
+
+		entries = append(entries, entry)
+	}
+
+	err = rows.Err()
 
 	return
 }
