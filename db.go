@@ -783,24 +783,28 @@ func ReplaceVNDBImageEntriesFromIterator[
 	return
 }
 
-func SearchAniDBJapaneseTitles(query string, limit int) (entries []AniDBEntry, err error) {
+// idxTableName should only be used with constant strings of value:
+// "anidb_titles_ja_fts_idx", "anidb_titles_en_fts_idx", or "anidb_titles_x_jat_fts_idx"
+func searchAniDBTitleIndex(query string, limit int, idxTableName string) (entries []AniDBEntry, err error) {
 	// get docids from fts index and join with anidb_titles
-	rows, err := db.Query(`
+	querySQL := fmt.Sprintf(`
 		SELECT
-			anidb_titles.id,
+			anidb_titles.aid,
 			anidb_titles.type,
 			anidb_titles.title,
 			anidb_titles.language
 		FROM
 			anidb_titles
 		JOIN (
-			SELECT docid, rank(matchinfo(anidb_titles_ja_fts_idx)) AS rank
-			FROM anidb_titles_ja_fts_idx
+			SELECT docid, rank(matchinfo(%s)) AS rank
+			FROM %s
 			WHERE title MATCH ?
 			ORDER BY rank DESC
 			LIMIT ?
 		) AS matches ON matches.docid = anidb_titles.id
-	`, query, limit)
+	`, idxTableName, idxTableName)
+
+	rows, err := db.Query(querySQL, query, limit)
 
 	if err != nil {
 		return
@@ -820,6 +824,313 @@ func SearchAniDBJapaneseTitles(query string, limit int) (entries []AniDBEntry, e
 	}
 
 	err = rows.Err()
+
+	return
+}
+
+func SearchAniDBJapaneseTitles(query string, limit int) ([]AniDBEntry, error) {
+	return searchAniDBTitleIndex(query, limit, "anidb_titles_ja_fts_idx")
+}
+
+func SearchAniDBEnglishTitles(query string, limit int) ([]AniDBEntry, error) {
+	return searchAniDBTitleIndex(query, limit, "anidb_titles_en_fts_idx")
+}
+
+func SearchAniDBRomajiTitles(query string, limit int) ([]AniDBEntry, error) {
+	return searchAniDBTitleIndex(query, limit, "anidb_titles_x_jat_fts_idx")
+}
+
+// Prefers Japanese titles, then English titles, then romaji titles.
+func SearchAniDBTitles(query string, limit int) (entries []AniDBEntry, err error) {
+	jaEntries, err := SearchAniDBJapaneseTitles(query, limit)
+
+	if err != nil {
+		return
+	}
+
+	entries = append(entries, jaEntries...)
+
+	if len(entries) >= limit {
+		return
+	}
+
+	enEntries, err := SearchAniDBEnglishTitles(query, limit)
+
+	if err != nil {
+		return
+	}
+
+	if len(entries) >= limit {
+		return
+	}
+
+	entries = append(entries, enEntries...)
+
+	romajiEntries, err := SearchAniDBRomajiTitles(query, limit)
+
+	if err != nil {
+		return
+	}
+
+	entries = append(entries, romajiEntries...)
+
+	if len(entries) >= limit {
+		entries = entries[:limit]
+	}
+
+	return
+}
+
+func GetAniDBTitlesByID(aid string) (entries []AniDBEntry, err error) {
+	rows, err := db.Query(`
+		SELECT
+			anidb_titles.aid,
+			anidb_titles.type,
+			anidb_titles.title,
+			anidb_titles.language
+		FROM
+			anidb_titles
+		WHERE
+			anidb_titles.aid = ?
+	`, aid)
+
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var entry AniDBEntry
+		err = rows.Scan(&entry.ID, &entry.Type, &entry.Title, &entry.Language)
+
+		if err != nil {
+			return
+		}
+
+		entries = append(entries, entry)
+	}
+
+	err = rows.Err()
+
+	return
+}
+
+// Get entries by ID
+func GetAnimeOfflineDatabaseEntryByID(id string) (entry AnimeOfflineDatabaseEntry, err error) {
+	row := db.QueryRow(`
+		SELECT
+			anime_offline_database.id,
+			anime_offline_database.title,
+			anime_offline_database.type,
+			anime_offline_database.episodes,
+			anime_offline_database.status,
+			anime_offline_database.season,
+			anime_offline_database.season_year,
+			anime_offline_database.picture,
+			anime_offline_database.thumbnail
+		FROM
+			anime_offline_database
+		WHERE
+			anime_offline_database.id = ?
+	`, id)
+
+	err = row.Scan(
+		&id,
+		&entry.Title,
+		&entry.Type,
+		&entry.Episodes,
+		&entry.Status,
+		&entry.AnimeSeason.Season,
+		&entry.AnimeSeason.Year,
+		&entry.Picture,
+		&entry.Thumbnail,
+	)
+
+	if err != nil {
+		return
+	}
+
+	err = appendDetailsToAnimeOfflineDatabaseEntry(id, &entry)
+
+	return
+}
+
+func GetAnimeOfflineDatabaseEntryByAID(aid string) (AnimeOfflineDatabaseEntry, error) {
+	return GetAnimeOfflineDatabaseEntryBySource("anidb.net", aid)
+}
+
+func GetAnimeOfflineDatabaseEntryBySource(sourceName string, sourceID string) (entry AnimeOfflineDatabaseEntry, err error) {
+	var id string
+
+	row := db.QueryRow(`
+		SELECT
+			anime_offline_database.id,
+			anime_offline_database.title,
+			anime_offline_database.type,
+			anime_offline_database.episodes,
+			anime_offline_database.status,
+			anime_offline_database.season,
+			anime_offline_database.season_year,
+			anime_offline_database.picture,
+			anime_offline_database.thumbnail
+		FROM
+			anime_offline_database
+		JOIN
+			anime_offline_database_sources
+		ON
+			anime_offline_database.id = anime_offline_database_sources.anime_offline_database_id
+		WHERE
+			anime_offline_database_sources.source_name = ?
+		AND
+			anime_offline_database_sources.source_id = ?
+	`, sourceName, sourceID)
+
+	err = row.Scan(
+		&id,
+		&entry.Title,
+		&entry.Type,
+		&entry.Episodes,
+		&entry.Status,
+		&entry.AnimeSeason.Season,
+		&entry.AnimeSeason.Year,
+		&entry.Picture,
+		&entry.Thumbnail,
+	)
+
+	if err != nil {
+		return
+	}
+
+	err = appendDetailsToAnimeOfflineDatabaseEntry(id, &entry)
+
+	return
+}
+
+func appendDetailsToAnimeOfflineDatabaseEntry(aid string, entry *AnimeOfflineDatabaseEntry) (err error) {
+	sourcesRows, err := db.Query(`
+		SELECT
+			anime_offline_database_sources.source_url
+		FROM
+			anime_offline_database_sources
+		WHERE
+			anime_offline_database_sources.anime_offline_database_id = ?
+	`, aid)
+
+	if err != nil {
+		return
+	}
+
+	defer sourcesRows.Close()
+
+	for sourcesRows.Next() {
+		var source string
+		err = sourcesRows.Scan(&source)
+
+		if err != nil {
+			return
+		}
+
+		entry.Sources = append(entry.Sources, source)
+	}
+
+	err = sourcesRows.Err()
+
+	if err != nil {
+		return
+	}
+
+	synonymsRows, err := db.Query(`
+		SELECT
+			anime_offline_database_synonyms.synonym
+		FROM
+			anime_offline_database_synonyms
+		WHERE
+			anime_offline_database_synonyms.anime_offline_database_id = ?
+	`, aid)
+
+	if err != nil {
+		return
+	}
+
+	defer synonymsRows.Close()
+
+	for synonymsRows.Next() {
+		var synonym string
+		err = synonymsRows.Scan(&synonym)
+
+		if err != nil {
+			return
+		}
+
+		entry.Synonyms = append(entry.Synonyms, synonym)
+	}
+
+	err = synonymsRows.Err()
+
+	if err != nil {
+		return
+	}
+
+	relationsRows, err := db.Query(`
+		SELECT
+			anime_offline_database_relations.relation
+		FROM
+			anime_offline_database_relations
+		WHERE
+			anime_offline_database_relations.anime_offline_database_id = ?
+	`, aid)
+
+	if err != nil {
+		return
+	}
+
+	defer relationsRows.Close()
+
+	for relationsRows.Next() {
+		var relation string
+		err = relationsRows.Scan(&relation)
+
+		if err != nil {
+			return
+		}
+
+		entry.Relations = append(entry.Relations, relation)
+	}
+
+	err = relationsRows.Err()
+
+	if err != nil {
+		return
+	}
+
+	tagsRows, err := db.Query(`
+		SELECT
+			anime_offline_database_tags.tag
+		FROM
+			anime_offline_database_tags
+		WHERE
+			anime_offline_database_tags.anime_offline_database_id = ?
+	`, aid)
+
+	if err != nil {
+		return
+	}
+
+	defer tagsRows.Close()
+
+	for tagsRows.Next() {
+		var tag string
+		err = tagsRows.Scan(&tag)
+
+		if err != nil {
+			return
+		}
+
+		entry.Tags = append(entry.Tags, tag)
+	}
+
+	err = tagsRows.Err()
 
 	return
 }
