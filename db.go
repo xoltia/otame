@@ -22,6 +22,9 @@ var db *sql.DB
 func OpenDB(fileName string) (err error) {
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL", fileName)
 	db, err = sql.Open(driverName, dsn)
+
+	// TODO: metadata table to remember update time,
+	// and version of the database schema.
 	return
 }
 
@@ -434,6 +437,209 @@ func CreateAniDBEntryWithTx(tx *sql.Tx, entry AniDBEntry) (err error) {
 		entry.Type,
 		entry.Title,
 		entry.Language,
+	)
+
+	return
+}
+
+func CreateVNDBTables() (err error) {
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS vndb_visual_novels (
+			vnid TEXT PRIMARY KEY NOT NULL,
+			original_language TEXT NOT NULL,
+			image_id TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS vndb_titles (
+			id INTEGER PRIMARY KEY,
+			vnid TEXT NOT NULL,
+			title TEXT NOT NULL,
+			language TEXT NOT NULL,
+			official BOOLEAN NOT NULL,
+			latin TEXT,
+			FOREIGN KEY(vnid) REFERENCES vndb_visual_novels(vnid)
+		);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS vndb_titles_ja_fts_idx USING fts4(
+			title,
+			content='vndb_titles',
+			tokenize=icu ja
+		);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS vndb_titles_en_fts_idx USING fts4(
+			title,
+			content='vndb_titles',
+			tokenize=icu en
+		);
+
+		CREATE TRIGGER IF NOT EXISTS vndb_titles_after_insert_ja AFTER INSERT ON vndb_titles
+		WHEN new.language = 'ja'
+		BEGIN
+			INSERT INTO vndb_titles_ja_fts_idx(docid, title) VALUES (new.id, new.title);
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS vndb_titles_after_insert_en AFTER INSERT ON vndb_titles
+		WHEN new.language = 'en'
+		BEGIN
+			INSERT INTO vndb_titles_en_fts_idx(docid, title) VALUES (new.id, new.title);
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS vndb_titles_before_delete_ja BEFORE DELETE ON vndb_titles
+		WHEN old.language = 'ja'
+		BEGIN
+			DELETE FROM vndb_titles_ja_fts_idx WHERE docid = old.id;
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS vndb_titles_before_delete_en BEFORE DELETE ON vndb_titles
+		WHEN old.language = 'en'
+		BEGIN
+			DELETE FROM vndb_titles_en_fts_idx WHERE docid = old.id;
+		END;
+	`)
+
+	return
+}
+
+func DeleteAllVNDBVisualNovelEntriesWithTx(tx *sql.Tx) (err error) {
+	_, err = tx.Exec("DELETE FROM vndb_visual_novels")
+
+	return
+}
+
+func ReplaceVNDBVisualNovelEntriesFromIterator[
+	T RowIterator[VNDBVisualNovelEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	if err = DeleteAllVNDBVisualNovelEntriesWithTx(tx); err != nil {
+		return
+	}
+
+	for {
+		var entry VNDBVisualNovelEntry
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		err = CreateVNDBVisualNovelEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = tx.Commit()
+
+	return
+}
+
+func CreateVNDBVisualNovelEntryWithTx(tx *sql.Tx, entry VNDBVisualNovelEntry) (err error) {
+	var stmt *sql.Stmt
+
+	stmt, err = tx.Prepare(`
+		INSERT INTO vndb_visual_novels (
+			vnid,
+			original_language,
+			image_id
+		) VALUES (?, ?, ?)
+	`)
+
+	if err != nil {
+		return
+	}
+
+	defer stmt.Close()
+
+	_, err = stmt.Exec(
+		entry.ID,
+		entry.OriginalLanguage,
+		entry.ImageID,
+	)
+
+	return
+}
+
+func DeleteAllVNDBTitleEntriesWithTx(tx *sql.Tx) (err error) {
+	_, err = tx.Exec("DELETE FROM vndb_titles")
+
+	return
+}
+
+func ReplaceVNDBTitleEntriesFromIterator[
+	T RowIterator[VNDBTitleEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	if err = DeleteAllVNDBTitleEntriesWithTx(tx); err != nil {
+		return
+	}
+
+	for {
+		var entry VNDBTitleEntry
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		err = CreateVNDBTitleEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = tx.Commit()
+
+	return
+}
+
+func CreateVNDBTitleEntryWithTx(tx *sql.Tx, entry VNDBTitleEntry) (err error) {
+	var stmt *sql.Stmt
+	stmt, err = tx.Prepare(`
+		INSERT INTO vndb_titles (
+			vnid,
+			title,
+			language,
+			official,
+			latin
+		) VALUES (?, ?, ?, ?, ?)
+	`)
+
+	if err != nil {
+		return
+	}
+
+	defer stmt.Close()
+
+	_, err = stmt.Exec(
+		entry.ID,
+		entry.Title,
+		entry.Language,
+		entry.Official,
+		entry.Latin,
 	)
 
 	return
