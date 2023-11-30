@@ -6,7 +6,6 @@ import (
 	"io"
 	nurl "net/url"
 	"strings"
-	"time"
 )
 
 var ErrEOF = io.EOF
@@ -33,6 +32,20 @@ func CloseDB() (err error) {
 	return
 }
 
+func CreateAllDBTables() (err error) {
+	if err = CreateAnimeOfflineDatabaseTables(); err != nil {
+		return
+	}
+
+	if err = CreateAniDBTables(); err != nil {
+		return
+	}
+
+	err = CreateVNDBTables()
+
+	return
+}
+
 func NewDBTransaction() (tx *sql.Tx, err error) {
 	tx, err = db.Begin()
 	return
@@ -49,8 +62,7 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			season TEXT NOT NULL,
 			season_year INTEGER,
 			picture TEXT NOT NULL,
-			thumbnail TEXT NOT NULL,
-			inserted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			thumbnail TEXT NOT NULL
 		);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_synonyms (
@@ -127,9 +139,8 @@ func CreateAnimeOfflineDatabaseEntryWithTx(tx *sql.Tx, entry AnimeOfflineDatabas
 			season,
 			season_year,
 			picture,
-			thumbnail,
-			inserted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			thumbnail
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 
 	if err != nil {
@@ -148,7 +159,6 @@ func CreateAnimeOfflineDatabaseEntryWithTx(tx *sql.Tx, entry AnimeOfflineDatabas
 		entry.AnimeSeason.Year,
 		entry.Picture,
 		entry.Thumbnail,
-		time.Now(),
 	)
 
 	if err != nil {
