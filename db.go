@@ -93,7 +93,6 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			anime_offline_database_relations(anime_offline_database_id);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_tags (
-			id INTEGER PRIMARY KEY,
 			anime_offline_database_id INTEGER NOT NULL,
 			tag TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
