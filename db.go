@@ -1133,3 +1133,184 @@ func appendDetailsToAnimeOfflineDatabaseEntry(aid string, entry *AnimeOfflineDat
 
 	return
 }
+
+func GetVNDBVisualNovelByID(vnid string) (entry VNDBVisualNovelEntry, err error) {
+	row := db.QueryRow(`
+		SELECT
+			vndb_visual_novels.vnid,
+			vndb_visual_novels.original_language,
+			vndb_visual_novels.image_id
+		FROM
+			vndb_visual_novels
+		WHERE
+			vndb_visual_novels.vnid = ?
+	`, vnid)
+
+	err = row.Scan(
+		&entry.ID,
+		&entry.OriginalLanguage,
+		&entry.ImageID,
+	)
+
+	return
+}
+
+func GetVNDBTitlesByVNID(vnid string) (entries []VNDBTitleEntry, err error) {
+	rows, err := db.Query(`
+		SELECT
+			vndb_titles.vnid,
+			vndb_titles.title,
+			vndb_titles.language,
+			vndb_titles.official,
+			vndb_titles.latin
+		FROM
+			vndb_titles
+		WHERE
+			vndb_titles.vnid = ?
+	`, vnid)
+
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var entry VNDBTitleEntry
+		err = rows.Scan(
+			&entry.ID,
+			&entry.Title,
+			&entry.Language,
+			&entry.Official,
+			&entry.Latin,
+		)
+
+		if err != nil {
+			return
+		}
+
+		entries = append(entries, entry)
+	}
+
+	err = rows.Err()
+
+	return
+}
+
+func GetVNDBImageInfoByID(id string) (entry VNDBImageEntry, err error) {
+	row := db.QueryRow(`
+		SELECT
+			vndb_images.id,
+			vndb_images.width,
+			vndb_images.height,
+			vndb_images.sexual_avg,
+			vndb_images.sexual_dev,
+			vndb_images.violence_avg,
+			vndb_images.violence_dev
+		FROM
+			vndb_images
+		WHERE
+			vndb_images.id = ?
+	`, id)
+
+	err = row.Scan(
+		&entry.ID,
+		&entry.Width,
+		&entry.Height,
+		&entry.SexualAvg,
+		&entry.SexualDev,
+		&entry.ViolenceAvg,
+		&entry.ViolenceDev,
+	)
+
+	return
+}
+
+func searchVNDBTitleIndex(query string, limit int, idxTableName string) (entries []VNDBTitleEntry, err error) {
+	querySQL := fmt.Sprintf(`
+		SELECT
+			vndb_titles.vnid,
+			vndb_titles.title,
+			vndb_titles.language,
+			vndb_titles.official,
+			vndb_titles.latin
+		FROM
+			vndb_titles
+		JOIN (
+			SELECT docid, rank(matchinfo(%s)) AS rank
+			FROM %s
+			WHERE title MATCH ?
+			ORDER BY rank DESC
+			LIMIT ?
+		) AS matches ON matches.docid = vndb_titles.id
+	`, idxTableName, idxTableName)
+
+	rows, err := db.Query(querySQL, query, limit)
+
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var entry VNDBTitleEntry
+		err = rows.Scan(
+			&entry.ID,
+			&entry.Title,
+			&entry.Language,
+			&entry.Official,
+			&entry.Latin,
+		)
+
+		if err != nil {
+			return
+		}
+
+		entries = append(entries, entry)
+	}
+
+	err = rows.Err()
+
+	return
+}
+
+func SearchVNDBJapaneseTitles(query string, limit int) ([]VNDBTitleEntry, error) {
+	return searchVNDBTitleIndex(query, limit, "vndb_titles_ja_fts_idx")
+}
+
+func SearchVNDBEnglishTitles(query string, limit int) ([]VNDBTitleEntry, error) {
+	return searchVNDBTitleIndex(query, limit, "vndb_titles_en_fts_idx")
+}
+
+func SearchVNDBTitles(query string, limit int) (entries []VNDBTitleEntry, err error) {
+	jaEntries, err := SearchVNDBJapaneseTitles(query, limit)
+
+	if err != nil {
+		return
+	}
+
+	entries = append(entries, jaEntries...)
+
+	if len(entries) >= limit {
+		return
+	}
+
+	enEntries, err := SearchVNDBEnglishTitles(query, limit)
+
+	if err != nil {
+		return
+	}
+
+	if len(entries) >= limit {
+		return
+	}
+
+	entries = append(entries, enEntries...)
+
+	if len(entries) >= limit {
+		entries = entries[:limit]
+	}
+
+	return
+}
