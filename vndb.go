@@ -23,6 +23,19 @@ type VNDBVisualNovelEntry struct {
 	ImageID          *string
 }
 
+func VNDBCDNURLFromImageID(imgID string) string {
+	imgID = imgID[2:]
+	lastTwoDigits := "0"
+
+	if len(imgID) > 1 {
+		lastTwoDigits = imgID[len(imgID)-2:]
+	} else {
+		lastTwoDigits += imgID
+	}
+
+	return fmt.Sprintf("https://t.vndb.org/cv/%s/%s.jpg", lastTwoDigits, imgID)
+}
+
 type VNDBImageEntry struct {
 	ID          string
 	Width       int
@@ -31,6 +44,10 @@ type VNDBImageEntry struct {
 	SexualDev   int
 	ViolenceAvg int
 	ViolenceDev int
+}
+
+func (e VNDBImageEntry) NSFW() bool {
+	return e.SexualAvg >= 40 || e.ViolenceAvg >= 40
 }
 
 func NewVNDBImageEntryDecoder(r io.Reader) *genericLineDecoder[VNDBImageEntry] {
