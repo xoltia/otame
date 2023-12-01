@@ -1,5 +1,8 @@
 buildtags := "icu fts4"
 
+gen-db DB="otame.sqlite3": _check-data
+    go run -tags "{{buildtags}}" ./cmd/gen -o {{DB}}
+
 build PKG:
     CGO_ENABLED=1
     go build -tags "{{buildtags}}" -o ./bin/{{PKG}} ./cmd/{{PKG}}
@@ -9,9 +12,6 @@ _check-data:
         just download-sources; \
         exit 1; \
     fi
-
-gen-db DB="otame.sqlite3": _check-data
-    go run -tags "{{buildtags}}" ./cmd/gen -o {{DB}}
 
 update-db DB="otame.sqlite3":
     go run -tags "{{buildtags}}" ./cmd/update -o {{DB}}
