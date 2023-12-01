@@ -6,6 +6,7 @@ import (
 	"io"
 	nurl "net/url"
 	"strings"
+	"time"
 )
 
 var ErrEOF = io.EOF
@@ -20,6 +21,12 @@ func OpenDB(fileName string) (err error) {
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL", fileName)
 	db, err = sql.Open(driverName, dsn)
 
+	if err != nil {
+		return
+	}
+
+	err = createUpdatesTable()
+
 	// TODO: metadata table to remember update time,
 	// and version of the database schema.
 	return
@@ -32,6 +39,143 @@ func GetDB() *sql.DB {
 
 func CloseDB() (err error) {
 	err = db.Close()
+	return
+}
+
+func createUpdatesTable() (err error) {
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS meta_updates (
+			id INTEGER PRIMARY KEY,
+			table_name TEXT NOT NULL,
+			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			first_id INTEGER NOT NULL,
+			last_id INTEGER NOT NULL,
+			dead BOOLEAN NOT NULL DEFAULT FALSE
+		);
+
+		CREATE INDEX IF NOT EXISTS meta_updates_table_name_idx ON meta_updates(table_name);
+		CREATE INDEX IF NOT EXISTS meta_updates_timestamp_idx ON meta_updates(timestamp);
+	`)
+
+	return
+}
+
+func insertTableUpdate(tx *sql.Tx, tableName string, lastID int64, firstID int64) (err error) {
+	_, err = tx.Exec(`
+		INSERT INTO meta_updates (
+			table_name,
+			last_id,
+			first_id
+		) VALUES (?, ?, ?)
+	`, tableName, lastID, firstID)
+
+	return
+}
+
+func getLiveRangeOfTable(tableName string) (firstID int64, lastID int64, err error) {
+	query := fmt.Sprintf(`
+		SELECT
+			COALESCE(meta_updates.first_id, defaults.first_id),
+			COALESCE(meta_updates.last_id, defaults.last_id)
+		FROM
+			(
+				SELECT
+					MIN(id) AS first_id,
+					MAX(id) AS last_id
+				FROM %s
+			) AS defaults
+		LEFT JOIN meta_updates
+		ON meta_updates.table_name = '%s'
+		AND meta_updates.dead = FALSE
+	`, tableName, tableName)
+
+	row := db.QueryRow(query)
+	err = row.Scan(&firstID, &lastID)
+
+	return
+}
+
+func killAllUpdatesForTable(tx *sql.Tx, tableName string) (err error) {
+	_, err = tx.Exec(`
+		UPDATE meta_updates
+		SET dead = TRUE
+		WHERE table_name = ?
+	`, tableName)
+
+	return
+}
+
+// Will not delete newest update even if it is older than duration.
+func ClearUpdatesOlderThan(duration time.Duration) (err error) {
+	tablesWithShiftingIDs := []string{
+		"anidb_titles",
+		"vndb_titles",
+		"anime_offline_database",
+	}
+
+	seconds := int(duration.Abs().Seconds())
+
+	tx, err := db.Begin()
+
+	defer tx.Rollback()
+
+	// dont kill newest update
+	killUpdatesAndReturnRangeStmt, err := tx.Prepare(`
+		UPDATE meta_updates
+		SET dead = TRUE
+		WHERE table_name = ?
+		AND CAST(strftime('%s', 'now') AS INTEGER) - CAST(strftime('%s', timestamp) AS INTEGER) > ?
+		AND dead = FALSE
+		AND id != (
+			SELECT id
+			FROM meta_updates
+			WHERE table_name = ?
+			AND dead = FALSE
+			ORDER BY timestamp DESC
+			LIMIT 1
+		)
+		RETURNING table_name, first_id, last_id;
+	`)
+
+	if err != nil {
+		return
+	}
+
+	defer killUpdatesAndReturnRangeStmt.Close()
+
+	for _, tableName := range tablesWithShiftingIDs {
+		var rows *sql.Rows
+		rows, err = killUpdatesAndReturnRangeStmt.Query(tableName, seconds, tableName)
+
+		if err != nil {
+			return
+		}
+
+		var tableName string
+		var firstID int64
+		var lastID int64
+
+		for rows.Next() {
+			err = rows.Scan(&tableName, &firstID, &lastID)
+
+			if err != nil {
+				return
+			}
+
+			query := fmt.Sprintf(`
+				DELETE FROM %s
+				WHERE id BETWEEN ? AND ?
+			`, tableName)
+
+			_, err = tx.Exec(query, firstID, lastID)
+
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	err = tx.Commit()
 	return
 }
 
@@ -57,7 +201,7 @@ func NewDBTransaction() (tx *sql.Tx, err error) {
 func CreateAnimeOfflineDatabaseTables() (err error) {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS anime_offline_database (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			title TEXT NOT NULL,
 			type TEXT NOT NULL,
 			episodes INTEGER NOT NULL,
@@ -69,7 +213,6 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 		);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_synonyms (
-			id INTEGER PRIMARY KEY,
 			anime_offline_database_id INTEGER NOT NULL,
 			synonym TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
@@ -81,7 +224,6 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			anime_offline_database_synonyms(anime_offline_database_id);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_relations (
-			id INTEGER PRIMARY KEY,
 			anime_offline_database_id INTEGER NOT NULL,
 			relation TEXT NOT NULL,
 			FOREIGN KEY(anime_offline_database_id) REFERENCES anime_offline_database(id)
@@ -104,7 +246,6 @@ func CreateAnimeOfflineDatabaseTables() (err error) {
 			anime_offline_database_tags(anime_offline_database_id);
 		
 		CREATE TABLE IF NOT EXISTS anime_offline_database_sources (
-			id INTEGER PRIMARY KEY,
 			anime_offline_database_id INTEGER NOT NULL,
 			source_name TEXT NOT NULL,
 			source_url TEXT NOT NULL,
@@ -152,10 +293,16 @@ func DeleteAllAnimeOfflineDatabaseEntriesWithTx(tx *sql.Tx) (err error) {
 
 	_, err = tx.Exec("DELETE FROM anime_offline_database_sources")
 
+	if err != nil {
+		return
+	}
+
+	err = killAllUpdatesForTable(tx, "anime_offline_database")
+
 	return
 }
 
-func CreateAnimeOfflineDatabaseEntryWithTx(tx *sql.Tx, entry AnimeOfflineDatabaseEntry) (err error) {
+func CreateAnimeOfflineDatabaseEntryWithTx(tx *sql.Tx, entry AnimeOfflineDatabaseEntry) (id int64, err error) {
 	var stmt *sql.Stmt
 	stmt, err = tx.Prepare(`
 		INSERT INTO anime_offline_database (
@@ -192,7 +339,6 @@ func CreateAnimeOfflineDatabaseEntryWithTx(tx *sql.Tx, entry AnimeOfflineDatabas
 		return
 	}
 
-	var id int64
 	id, err = result.LastInsertId()
 
 	if err != nil {
@@ -298,6 +444,86 @@ func CreateAnimeOfflineDatabaseEntryWithTx(tx *sql.Tx, entry AnimeOfflineDatabas
 	return
 }
 
+func UpdateAnimeOfflineDatabaseEntriesFromIterator[
+	T RowIterator[AnimeOfflineDatabaseEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_synonyms")
+
+	if err != nil {
+		return
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_relations")
+
+	if err != nil {
+		return
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_tags")
+
+	if err != nil {
+		return
+	}
+
+	_, err = tx.Exec("DELETE FROM anime_offline_database_sources")
+
+	if err != nil {
+		return
+	}
+
+	var entry AnimeOfflineDatabaseEntry
+	entry, err = iter.Next()
+
+	if err != nil {
+		return
+	}
+
+	var lastID int64
+	firstID, err := CreateAnimeOfflineDatabaseEntryWithTx(tx, entry)
+
+	if err != nil {
+		return
+	}
+
+	var id int64
+	for {
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			lastID = id
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		id, err = CreateAnimeOfflineDatabaseEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = insertTableUpdate(tx, "anime_offline_database", lastID, firstID)
+
+	if err != nil {
+		return
+	}
+
+	err = tx.Commit()
+
+	return
+}
+
 func ReplaceAnimeOfflineDatabaseEntriesFromIterator[
 	T RowIterator[AnimeOfflineDatabaseEntry],
 ](iter T) (err error) {
@@ -327,7 +553,7 @@ func ReplaceAnimeOfflineDatabaseEntriesFromIterator[
 			return
 		}
 
-		err = CreateAnimeOfflineDatabaseEntryWithTx(tx, entry)
+		_, err = CreateAnimeOfflineDatabaseEntryWithTx(tx, entry)
 
 		if err != nil {
 			return
@@ -342,7 +568,7 @@ func ReplaceAnimeOfflineDatabaseEntriesFromIterator[
 func CreateAniDBTables() (err error) {
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS anidb_titles (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			aid TEXT NOT NULL,
 			type TEXT NOT NULL,
 			title TEXT NOT NULL,
@@ -412,6 +638,68 @@ func CreateAniDBTables() (err error) {
 func DeleteAllAniDBEntriesWithTx(tx *sql.Tx) (err error) {
 	_, err = tx.Exec("DELETE FROM anidb_titles")
 
+	if err != nil {
+		return
+	}
+
+	err = killAllUpdatesForTable(tx, "anidb_titles")
+
+	return
+}
+
+func UpdateAniDBEntriesFromIterator[
+	T RowIterator[AniDBEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	var entry AniDBEntry
+	entry, err = iter.Next()
+
+	if err != nil {
+		return
+	}
+
+	var lastID int64
+	firstID, err := CreateAniDBEntryWithTx(tx, entry)
+
+	if err != nil {
+		return
+	}
+
+	var id int64
+	for {
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			lastID = id
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		id, err = CreateAniDBEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = insertTableUpdate(tx, "anidb_titles", lastID, firstID)
+
+	if err != nil {
+		return
+	}
+
+	err = tx.Commit()
+
 	return
 }
 
@@ -442,7 +730,7 @@ func ReplaceAniDBEntriesFromIterator[
 			return
 		}
 
-		err = CreateAniDBEntryWithTx(tx, entry)
+		_, err = CreateAniDBEntryWithTx(tx, entry)
 
 		if err != nil {
 			return
@@ -454,7 +742,7 @@ func ReplaceAniDBEntriesFromIterator[
 	return
 }
 
-func CreateAniDBEntryWithTx(tx *sql.Tx, entry AniDBEntry) (err error) {
+func CreateAniDBEntryWithTx(tx *sql.Tx, entry AniDBEntry) (id int64, err error) {
 	var stmt *sql.Stmt
 	stmt, err = tx.Prepare(`
 		INSERT INTO anidb_titles (
@@ -471,12 +759,16 @@ func CreateAniDBEntryWithTx(tx *sql.Tx, entry AniDBEntry) (err error) {
 
 	defer stmt.Close()
 
-	_, err = stmt.Exec(
+	result, err := stmt.Exec(
 		entry.AID,
 		entry.Type,
 		entry.Title,
 		entry.Language,
 	)
+
+	if err == nil {
+		id, err = result.LastInsertId()
+	}
 
 	return
 }
@@ -491,7 +783,7 @@ func CreateVNDBTables() (err error) {
 		);
 
 		CREATE TABLE IF NOT EXISTS vndb_titles (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			vnid TEXT NOT NULL,
 			title TEXT NOT NULL,
 			language TEXT NOT NULL,
@@ -626,6 +918,68 @@ func CreateVNDBVisualNovelEntryWithTx(tx *sql.Tx, entry VNDBVisualNovelEntry) (e
 func DeleteAllVNDBTitleEntriesWithTx(tx *sql.Tx) (err error) {
 	_, err = tx.Exec("DELETE FROM vndb_titles")
 
+	if err != nil {
+		return
+	}
+
+	err = killAllUpdatesForTable(tx, "vndb_titles")
+
+	return
+}
+
+func UpdateVNDBTitleEntriesFromIterator[
+	T RowIterator[VNDBTitleEntry],
+](iter T) (err error) {
+	tx, err := db.Begin()
+
+	if err != nil {
+		return
+	}
+
+	defer tx.Rollback()
+
+	var entry VNDBTitleEntry
+	entry, err = iter.Next()
+
+	if err != nil {
+		return
+	}
+
+	var lastID int64
+	firstID, err := CreateVNDBTitleEntryWithTx(tx, entry)
+
+	if err != nil {
+		return
+	}
+
+	var id int64
+	for {
+		entry, err = iter.Next()
+
+		if err == ErrEOF {
+			lastID = id
+			break
+		}
+
+		if err != nil {
+			return
+		}
+
+		id, err = CreateVNDBTitleEntryWithTx(tx, entry)
+
+		if err != nil {
+			return
+		}
+	}
+
+	err = insertTableUpdate(tx, "vndb_titles", lastID, firstID)
+
+	if err != nil {
+		return
+	}
+
+	err = tx.Commit()
+
 	return
 }
 
@@ -656,7 +1010,7 @@ func ReplaceVNDBTitleEntriesFromIterator[
 			return
 		}
 
-		err = CreateVNDBTitleEntryWithTx(tx, entry)
+		_, err = CreateVNDBTitleEntryWithTx(tx, entry)
 
 		if err != nil {
 			return
@@ -668,7 +1022,7 @@ func ReplaceVNDBTitleEntriesFromIterator[
 	return
 }
 
-func CreateVNDBTitleEntryWithTx(tx *sql.Tx, entry VNDBTitleEntry) (err error) {
+func CreateVNDBTitleEntryWithTx(tx *sql.Tx, entry VNDBTitleEntry) (id int64, err error) {
 	var stmt *sql.Stmt
 	stmt, err = tx.Prepare(`
 		INSERT INTO vndb_titles (
@@ -686,13 +1040,17 @@ func CreateVNDBTitleEntryWithTx(tx *sql.Tx, entry VNDBTitleEntry) (err error) {
 
 	defer stmt.Close()
 
-	_, err = stmt.Exec(
+	result, err := stmt.Exec(
 		entry.VNID,
 		entry.Title,
 		entry.Language,
 		entry.Official,
 		entry.Latin,
 	)
+
+	if err == nil {
+		id, err = result.LastInsertId()
+	}
 
 	return
 }
@@ -785,6 +1143,12 @@ func ReplaceVNDBImageEntriesFromIterator[
 // idxTableName should only be used with constant strings of value:
 // "anidb_titles_ja_fts_idx", "anidb_titles_en_fts_idx", or "anidb_titles_x_jat_fts_idx"
 func searchAniDBTitleIndex(query string, limit int, idxTableName string) (entries []AniDBEntry, err error) {
+	firstID, lastID, err := getLiveRangeOfTable("anidb_titles")
+
+	if err != nil {
+		return
+	}
+
 	// get docids from fts index and join with anidb_titles
 	querySQL := fmt.Sprintf(`
 		SELECT
@@ -799,12 +1163,13 @@ func searchAniDBTitleIndex(query string, limit int, idxTableName string) (entrie
 			SELECT docid, rank(matchinfo(%s)) AS rank
 			FROM %s
 			WHERE title MATCH ?
+			AND docid BETWEEN ? AND ?
 			ORDER BY rank DESC
 			LIMIT ?
 		) AS matches ON matches.docid = anidb_titles.id
 	`, idxTableName, idxTableName)
 
-	rows, err := db.Query(querySQL, query, limit)
+	rows, err := db.Query(querySQL, query, firstID, lastID, limit)
 
 	if err != nil {
 		return
@@ -881,6 +1246,9 @@ func SearchAniDBTitles(query string, limit int) (entries []AniDBEntry, err error
 	return
 }
 
+// Can also retrieve dead entries, thus can
+// potentially fail to find an entry which was previously
+// a valid ID.
 func GetAniDBTitleByID(id string) (entry AniDBEntry, err error) {
 	row := db.QueryRow(`
 		SELECT
@@ -901,6 +1269,12 @@ func GetAniDBTitleByID(id string) (entry AniDBEntry, err error) {
 }
 
 func GetAniDBTitlesByAID(aid string) (entries []AniDBEntry, err error) {
+	firstID, lastID, err := getLiveRangeOfTable("anidb_titles")
+
+	if err != nil {
+		return
+	}
+
 	rows, err := db.Query(`
 		SELECT
 			anidb_titles.id,
@@ -912,7 +1286,9 @@ func GetAniDBTitlesByAID(aid string) (entries []AniDBEntry, err error) {
 			anidb_titles
 		WHERE
 			anidb_titles.aid = ?
-	`, aid)
+		AND
+			anidb_titles.id BETWEEN ? AND ?
+	`, aid, firstID, lastID)
 
 	if err != nil {
 		return
@@ -1177,6 +1553,12 @@ func GetVNDBVisualNovelByID(vnid string) (entry VNDBVisualNovelEntry, err error)
 }
 
 func GetVNDBTitlesByVNID(vnid string) (entries []VNDBTitleEntry, err error) {
+	firstID, lastID, err := getLiveRangeOfTable("vndb_titles")
+
+	if err != nil {
+		return
+	}
+
 	rows, err := db.Query(`
 		SELECT
 			vndb_titles.id,
@@ -1189,7 +1571,9 @@ func GetVNDBTitlesByVNID(vnid string) (entries []VNDBTitleEntry, err error) {
 			vndb_titles
 		WHERE
 			vndb_titles.vnid = ?
-	`, vnid)
+		AND
+			vndb_titles.id BETWEEN ? AND ?
+	`, vnid, firstID, lastID)
 
 	if err != nil {
 		return
@@ -1250,6 +1634,12 @@ func GetVNDBImageInfoByID(id string) (entry VNDBImageEntry, err error) {
 }
 
 func searchVNDBTitleIndex(query string, limit int, idxTableName string) (entries []VNDBTitleEntry, err error) {
+	firstID, lastID, err := getLiveRangeOfTable("vndb_titles")
+
+	if err != nil {
+		return
+	}
+
 	querySQL := fmt.Sprintf(`
 		SELECT
 			vndb_titles.id,
@@ -1264,12 +1654,13 @@ func searchVNDBTitleIndex(query string, limit int, idxTableName string) (entries
 			SELECT docid, rank(matchinfo(%s)) AS rank
 			FROM %s
 			WHERE title MATCH ?
+			AND docid BETWEEN ? AND ?
 			ORDER BY rank DESC
 			LIMIT ?
 		) AS matches ON matches.docid = vndb_titles.id
 	`, idxTableName, idxTableName)
 
-	rows, err := db.Query(querySQL, query, limit)
+	rows, err := db.Query(querySQL, query, firstID, lastID, limit)
 
 	if err != nil {
 		return
