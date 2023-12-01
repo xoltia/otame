@@ -8,6 +8,13 @@ import (
 	"github.com/xoltia/otame"
 )
 
+/* Generates the otame.sqlite3 database from the anime-offline-database-minified.json,
+ * anidb-titles.dat, and vndb-db-latest files.
+ * Unlike update, this does not download the files.
+ * This is useful for development or for generating the database from a local copy
+ * of the data files.
+ */
+
 var (
 	aodbPath   = flag.String("aodb", "./data/anime-offline-database-minified.json", "Path to anime-offline-database.json")
 	anidbPath  = flag.String("anidb", "./data/anidb-titles.dat", "Path to anidb-titles.dat")

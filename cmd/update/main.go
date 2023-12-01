@@ -8,6 +8,11 @@ import (
 	"github.com/xoltia/otame"
 )
 
+/* Downloads latest source files and generates the otame.sqlite3 database.
+ * This is the recommended way to generate the database, and is useful
+ * for updating the database, even as it is being used by other readers.
+ */
+
 var (
 	outputPath = flag.String("o", "./otame.sqlite3", "Path to output sqlite3 database")
 )
