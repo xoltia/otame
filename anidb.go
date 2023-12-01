@@ -23,6 +23,7 @@ var entryTypeMap = map[string]string{
 
 type AniDBEntry struct {
 	ID       string
+	AID      string
 	Type     string
 	Language string
 	Title    string
@@ -73,7 +74,7 @@ func (a *AniDBEntryDecoder) Next() (entry AniDBEntry, err error) {
 		return
 	}
 
-	entry.ID = line[0]
+	entry.AID = line[0]
 	entry.Type = entryTypeMap[line[1]]
 	entry.Language = line[2]
 	entry.Title = line[3]

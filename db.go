@@ -472,7 +472,7 @@ func CreateAniDBEntryWithTx(tx *sql.Tx, entry AniDBEntry) (err error) {
 	defer stmt.Close()
 
 	_, err = stmt.Exec(
-		entry.ID,
+		entry.AID,
 		entry.Type,
 		entry.Title,
 		entry.Language,
@@ -788,6 +788,7 @@ func searchAniDBTitleIndex(query string, limit int, idxTableName string) (entrie
 	// get docids from fts index and join with anidb_titles
 	querySQL := fmt.Sprintf(`
 		SELECT
+			anidb_titles.id,
 			anidb_titles.aid,
 			anidb_titles.type,
 			anidb_titles.title,
@@ -813,7 +814,7 @@ func searchAniDBTitleIndex(query string, limit int, idxTableName string) (entrie
 
 	for rows.Next() {
 		var entry AniDBEntry
-		err = rows.Scan(&entry.ID, &entry.Type, &entry.Title, &entry.Language)
+		err = rows.Scan(&entry.ID, &entry.AID, &entry.Type, &entry.Title, &entry.Language)
 
 		if err != nil {
 			return
@@ -880,9 +881,29 @@ func SearchAniDBTitles(query string, limit int) (entries []AniDBEntry, err error
 	return
 }
 
-func GetAniDBTitlesByID(aid string) (entries []AniDBEntry, err error) {
+func GetAniDBTitleByID(id string) (entry AniDBEntry, err error) {
+	row := db.QueryRow(`
+		SELECT
+			anidb_titles.id,
+			anidb_titles.aid,
+			anidb_titles.type,
+			anidb_titles.title,
+			anidb_titles.language
+		FROM
+			anidb_titles
+		WHERE
+			anidb_titles.id = ?
+	`, id)
+
+	err = row.Scan(&entry.ID, &entry.AID, &entry.Type, &entry.Title, &entry.Language)
+
+	return
+}
+
+func GetAniDBTitlesByAID(aid string) (entries []AniDBEntry, err error) {
 	rows, err := db.Query(`
 		SELECT
+			anidb_titles.id,
 			anidb_titles.aid,
 			anidb_titles.type,
 			anidb_titles.title,
@@ -901,7 +922,7 @@ func GetAniDBTitlesByID(aid string) (entries []AniDBEntry, err error) {
 
 	for rows.Next() {
 		var entry AniDBEntry
-		err = rows.Scan(&entry.ID, &entry.Type, &entry.Title, &entry.Language)
+		err = rows.Scan(&entry.ID, &entry.AID, &entry.Type, &entry.Title, &entry.Language)
 
 		if err != nil {
 			return
