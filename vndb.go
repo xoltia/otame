@@ -11,6 +11,7 @@ import (
 
 type VNDBTitleEntry struct {
 	ID       string
+	VNID     string
 	Language string
 	Official bool
 	Title    string
@@ -95,7 +96,7 @@ func NewVNDBTitleEntryDecoder(r io.Reader) *genericLineDecoder[VNDBTitleEntry] {
 		separatorChar: "\t",
 		nCols:         5,
 		unmarshal: func(line []string) (entry VNDBTitleEntry, err error) {
-			entry.ID = line[0]
+			entry.VNID = line[0]
 			entry.Language = line[1]
 			entry.Official = line[2] == "t"
 			entry.Title = line[3]

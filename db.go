@@ -687,7 +687,7 @@ func CreateVNDBTitleEntryWithTx(tx *sql.Tx, entry VNDBTitleEntry) (err error) {
 	defer stmt.Close()
 
 	_, err = stmt.Exec(
-		entry.ID,
+		entry.VNID,
 		entry.Title,
 		entry.Language,
 		entry.Official,
@@ -1179,6 +1179,7 @@ func GetVNDBVisualNovelByID(vnid string) (entry VNDBVisualNovelEntry, err error)
 func GetVNDBTitlesByVNID(vnid string) (entries []VNDBTitleEntry, err error) {
 	rows, err := db.Query(`
 		SELECT
+			vndb_titles.id,
 			vndb_titles.vnid,
 			vndb_titles.title,
 			vndb_titles.language,
@@ -1200,6 +1201,7 @@ func GetVNDBTitlesByVNID(vnid string) (entries []VNDBTitleEntry, err error) {
 		var entry VNDBTitleEntry
 		err = rows.Scan(
 			&entry.ID,
+			&entry.VNID,
 			&entry.Title,
 			&entry.Language,
 			&entry.Official,
@@ -1250,6 +1252,7 @@ func GetVNDBImageInfoByID(id string) (entry VNDBImageEntry, err error) {
 func searchVNDBTitleIndex(query string, limit int, idxTableName string) (entries []VNDBTitleEntry, err error) {
 	querySQL := fmt.Sprintf(`
 		SELECT
+			vndb_titles.id,
 			vndb_titles.vnid,
 			vndb_titles.title,
 			vndb_titles.language,
@@ -1278,6 +1281,7 @@ func searchVNDBTitleIndex(query string, limit int, idxTableName string) (entries
 		var entry VNDBTitleEntry
 		err = rows.Scan(
 			&entry.ID,
+			&entry.VNID,
 			&entry.Title,
 			&entry.Language,
 			&entry.Official,
