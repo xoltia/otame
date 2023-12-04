@@ -1176,7 +1176,7 @@ func GetVNDBVisualNovelByID(vnid string) (entry VNDBVisualNovelEntry, err error)
 	return
 }
 
-func GetVNDBTitlesByID(id string) (entry VNDBTitleEntry, err error) {
+func GetVNDBTitleByID(id string) (entry VNDBTitleEntry, err error) {
 	row := db.QueryRow(`
 		SELECT
 			vndb_titles.id,
