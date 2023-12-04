@@ -1176,8 +1176,8 @@ func GetVNDBVisualNovelByID(vnid string) (entry VNDBVisualNovelEntry, err error)
 	return
 }
 
-func GetVNDBTitlesByID(id string) (entries []VNDBTitleEntry, err error) {
-	rows, err := db.Query(`
+func GetVNDBTitlesByID(id string) (entry VNDBTitleEntry, err error) {
+	row := db.QueryRow(`
 		SELECT
 			vndb_titles.id,
 			vndb_titles.vnid,
@@ -1195,27 +1195,20 @@ func GetVNDBTitlesByID(id string) (entries []VNDBTitleEntry, err error) {
 		return
 	}
 
-	defer rows.Close()
+	err = row.Scan(
+		&entry.ID,
+		&entry.VNID,
+		&entry.Title,
+		&entry.Language,
+		&entry.Official,
+		&entry.Latin,
+	)
 
-	for rows.Next() {
-		var entry VNDBTitleEntry
-		err = rows.Scan(
-			&entry.ID,
-			&entry.VNID,
-			&entry.Title,
-			&entry.Language,
-			&entry.Official,
-			&entry.Latin,
-		)
-
-		if err != nil {
-			return
-		}
-
-		entries = append(entries, entry)
+	if err != nil {
+		return
 	}
 
-	err = rows.Err()
+	err = row.Err()
 
 	return
 }
