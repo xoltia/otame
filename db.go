@@ -1176,6 +1176,50 @@ func GetVNDBVisualNovelByID(vnid string) (entry VNDBVisualNovelEntry, err error)
 	return
 }
 
+func GetVNDBTitlesByID(id string) (entries []VNDBTitleEntry, err error) {
+	rows, err := db.Query(`
+		SELECT
+			vndb_titles.id,
+			vndb_titles.vnid,
+			vndb_titles.title,
+			vndb_titles.language,
+			vndb_titles.official,
+			vndb_titles.latin
+		FROM
+			vndb_titles
+		WHERE
+			vndb_titles.id = ?
+	`, id)
+
+	if err != nil {
+		return
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var entry VNDBTitleEntry
+		err = rows.Scan(
+			&entry.ID,
+			&entry.VNID,
+			&entry.Title,
+			&entry.Language,
+			&entry.Official,
+			&entry.Latin,
+		)
+
+		if err != nil {
+			return
+		}
+
+		entries = append(entries, entry)
+	}
+
+	err = rows.Err()
+
+	return
+}
+
 func GetVNDBTitlesByVNID(vnid string) (entries []VNDBTitleEntry, err error) {
 	rows, err := db.Query(`
 		SELECT
